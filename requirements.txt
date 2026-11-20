@@ -1,0 +1,3 @@
+aiofiles
+msgspec
+websockets

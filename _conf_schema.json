@@ -1,0 +1,56 @@
+{
+    "HOST": {
+        "description": "Yunzai 服务地址",
+        "type": "string",
+        "hint": "Yunzai 默认监听 localhost，可填 127.0.0.1 或容器名",
+        "default": "localhost"
+    },
+    "PORT": {
+        "description": "Yunzai HTTP/WebSocket 端口",
+        "type": "string",
+        "hint": "对应 Yunzai config/server.yaml 的 port，默认 2536",
+        "default": "2536"
+    },
+    "PATH": {
+        "description": "Yunzai WebSocket 路径",
+        "type": "string",
+        "hint": "使用 Yunzai 内置 GSUIDCore 适配器，默认 GSUIDCore",
+        "default": "GSUIDCore"
+    },
+    "TOKEN": {
+        "description": "Yunzai 服务器鉴权 Token",
+        "type": "string",
+        "hint": "对应 Yunzai config/server.yaml 的 auth，可留空",
+        "default": ""
+    },
+    "TOKEN_KEY": {
+        "description": "Token 查询参数名",
+        "type": "string",
+        "hint": "默认 token，即 ws://host:port/GSUIDCore?token=xxx",
+        "default": "token"
+    },
+    "BOT_ID": {
+        "description": "连接标识",
+        "type": "string",
+        "hint": "用于日志区分，默认 AstrBot",
+        "default": "AstrBot"
+    },
+    "YUNZAI_ONLY_PREFIXES_STRICT": {
+        "description": "仅转发命中前缀的消息",
+        "type": "bool",
+        "hint": "打开后只有命中前缀的消息转发给 Yunzai，其余消息不转发",
+        "default": false
+    },
+    "YUNZAI_ONLY_PREFIXES": {
+        "description": "拦截 AstrBot 回复的触发前缀",
+        "type": "list",
+        "hint": "例如: 帮助, 状态, 原神, 星铁，每条输入后回车",
+        "default": []
+    },
+    "MAX_RETRY_TIMES": {
+        "description": "Yunzai 连接断开后的最大重试次数",
+        "type": "int",
+        "hint": "默认30次，-1为无限重试",
+        "default": 30
+    }
+}

@@ -1,0 +1,11 @@
+name: astrbot_plugin_yunzai_adapter
+display_name: TRSS-Yunzai 链接
+desc: 用于链接GSUIDCore（TRSS-Yunzai) 云崽 的适配器！适用于多种游戏功能, 原神、星铁、绝区零、等游戏的最佳工具箱！
+help: 配置 Yunzai 地址后自动连接；管理员可发送 /连接yunzai 手动重连,如 QQ、微信 机器人发送消息错误可关闭机器人再打开就正常了，及小概率。
+version: v1.0.0
+author: darling-148
+repo: https://github.com/darling-148/astrbot_plugin_yunzai_adapter.git
+support_platforms:
+  - qq_official
+  - qq_official_webhook
+  - weixin_oc
