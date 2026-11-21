@@ -150,15 +150,6 @@ class YunzaiAdapter(Star):
     async def terminate(self) -> None:
         await self.client.stop()
 
-    def _trace(self, line: str) -> None:
-        """把关键诊断追加到文件, 便于无终端时排查。"""
-        try:
-            path = self.temp_dir.parent / "trace.log"
-            with path.open("a", encoding="utf-8") as f:
-                f.write(f"{line}\n")
-        except OSError as e:
-            logger.warning(f"[Yunzai] 写诊断日志失败: {e}")
-
     def _clean_temp_dir(self) -> None:
         """清理上次运行遗留的临时文件。"""
         try:
@@ -595,19 +586,10 @@ class YunzaiAdapter(Star):
         pm = 1 if event.is_admin() else 6
 
         logger.info(
-            "[Yunzai] AstrBot 收到消息: 平台=%s 实例=%s 类型=%s 会话=%s 发送者ID=%s 上报ID=%s 正文=%r",
-            pn,
-            platform_id,
-            event.get_message_type(),
-            event.get_session_id(),
-            event.get_sender_id(),
-            self.USER_ID_OVERRIDE or event.get_sender_id(),
-            self._plain_text(event)[:100],
-        )
-        self._trace(
-            f"收到消息 平台={pn} 实例={platform_id} 类型={event.get_message_type()} "
-            f"发送者ID={event.get_sender_id()} 上报ID={self.USER_ID_OVERRIDE or event.get_sender_id()} "
-            f"正文={self._plain_text(event)[:100]!r}"
+            "[Yunzai] 收到 <%s:%s> %s",
+            "群" if event.get_message_type() == MessageType.GROUP_MESSAGE else "私",
+            event.get_group_id() or event.get_sender_id(),
+            self._plain_text(event)[:60],
         )
 
         # 前缀判定必须在任何提前返回/异常之前定下来, 否则"该拦不拦"会漏
@@ -622,9 +604,7 @@ class YunzaiAdapter(Star):
             if yunzai_only:
                 # 显式阻断事件传播, 不参与后续 LLM 等流程
                 event.stop_event()
-                logger.info(
-                    "[Yunzai] 当前消息命中 YUNZAI_ONLY_PREFIXES, 已调用 stop_event() 拦截后续 AstrBot LLM 流程"
-                )
+                logger.info("[Yunzai] 命中独占前缀, 已拦截后续 LLM 流程")
 
     async def _report_message(
         self,
@@ -662,14 +642,8 @@ class YunzaiAdapter(Star):
             content=content,
             # Yunzai 回复不带 msg_id, 这里记录会话 id 供 client 回查
             msg_id=event.get_session_id(),
+            raw_msg_id=str(getattr(event.message_obj, "message_id", "") or ""),
             user_pm=pm,
-        )
-        logger.info(
-            f"【发送】[Yunzai]: {msg.bot_id} - {msg.user_type} - {msg.group_id}"
-        )
-        self._trace(
-            f"上报 Yunzai user_id={msg.user_id} 连接={self.client.is_connected} "
-            f"段={[item.type for item in msg.content]}"
         )
         await self.client.report(msg)
 

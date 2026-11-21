@@ -66,6 +66,8 @@ class YunzaiClient:
         self._supervisor: asyncio.Task[None] | None = None
         self._running: bool = False
         self._sessions: OrderedDict[tuple[str, str, str], str] = OrderedDict()
+        # session_id -> 原始入站消息 id, 用于多条回复时重置被动回复 msg_id
+        self._raw_msg_ids: dict[str, str] = {}
         self._warmed: set[str] = set()
 
     @property
@@ -107,12 +109,6 @@ class YunzaiClient:
             return
         self._remember_session(msg)
         await self._queue.put(msg)
-        logger.info(
-            "[Yunzai] 已入队上报: %s:%s 消息段=%s",
-            msg.user_type,
-            msg.group_id or msg.user_id,
-            [item.type for item in msg.content],
-        )
 
     def _remember_session(self, msg: MessageReceive) -> None:
         """记录上报消息的会话 id，供 Yunzai 回复时回查。"""
@@ -123,8 +119,12 @@ class YunzaiClient:
         key = (msg.bot_self_id, target_type, str(target_id))
         self._sessions[key] = msg.msg_id
         self._sessions.move_to_end(key)
+        # 保存原始入站消息 id, 供多条回复重置被动回复 msg_id
+        if msg.raw_msg_id and msg.msg_id:
+            self._raw_msg_ids[msg.msg_id] = msg.raw_msg_id
         while len(self._sessions) > _MAX_SESSION_CACHE:
-            _ = self._sessions.popitem(last=False)
+            evicted_key, evicted_session = self._sessions.popitem(last=False)
+            self._raw_msg_ids.pop(evicted_session, None)
 
     # ------------------------------------------------------------------
     # 连接生命周期
@@ -142,8 +142,7 @@ class YunzaiClient:
                     )
                     break
                 logger.warning(
-                    f"[链接错误] Yunzai 服务器连接失败: {e} ...请确认 Yunzai 已启动并监听端口! "
-                    + f"{RECONNECT_INTERVAL}秒后重试 (第 {retry} 次)"
+                    f"[Yunzai] 连接失败: {e}, {RECONNECT_INTERVAL}秒后重试 (第 {retry} 次)"
                 )
                 await asyncio.sleep(RECONNECT_INTERVAL)
                 continue
@@ -151,17 +150,17 @@ class YunzaiClient:
             await self._serve(ws)
             if not self._running:
                 break
-            logger.warning(f"与[Yunzai]断开连接! Bot_ID: {self.bot_id}")
+            logger.warning(f"[Yunzai] 连接断开, {RECONNECT_INTERVAL}秒后重连")
             await asyncio.sleep(RECONNECT_INTERVAL)
 
     async def _connect(self) -> ClientConnection:
         ws_url = f"ws://{self.host}:{self.port}/{self.path}"
         if self.token:
             ws_url += f"?{self.token_key}={self.token}"
-        logger.info(f"Bot_ID: {self.bot_id}连接至[Yunzai]: {ws_url}...")
+        logger.info(f"[Yunzai] 连接 {ws_url} ...")
         ws = await ws_connect(ws_url, max_size=2**26, open_timeout=5, ping_timeout=20)
         self._ws = ws
-        logger.info(f"与[Yunzai]成功连接! Bot_ID: {self.bot_id}")
+        logger.info("[Yunzai] 已连接")
         return ws
 
     async def _serve(self, ws: ClientConnection) -> None:
@@ -172,11 +171,11 @@ class YunzaiClient:
                 try:
                     await self._handle_packet(raw)
                 except Exception as e:
-                    logger.exception(e)
+                    logger.warning(f"[Yunzai] 处理消息失败: {e}")
         except ConnectionClosed:
             pass
         except Exception as e:
-            logger.exception(e)
+            logger.warning(f"[Yunzai] 收包循环异常: {e}")
         finally:
             _ = send_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -251,30 +250,20 @@ class YunzaiClient:
         if not msg.content:
             return
 
-        logger.info(
-            f"【接收】[Yunzai]: {msg.bot_id} - {msg.target_type} - {msg.target_id}"
-        )
         await self._send_to_platform(msg)
 
     async def _send_to_platform(self, msg: MessageSend) -> None:
         if not (msg.target_id and msg.content):
             return
+        preview = "".join(str(c.data) for c in msg.content if c.data)[:40]
+        kinds = "/".join(dict.fromkeys(c.type or "" for c in msg.content))
         logger.info(
-            "[Yunzai] 收到回复, 开始发送到平台: bot_id=%s self_id=%s 类型=%s 目标=%s 文本=%r",
-            msg.bot_id,
-            msg.bot_self_id,
-            msg.target_type,
+            "[Yunzai] 回复 <%s:%s> [%s] %s",
+            "群" if msg.target_type != "direct" else "私",
             msg.target_id,
-            "".join(str(c.data) for c in msg.content if c.data)[:80],
+            kinds,
+            preview.replace("\n", " "),
         )
-        try:
-            with (self.temp_dir.parent / "trace.log").open("a", encoding="utf-8") as f:
-                f.write(
-                    f"Yunzai回复 self_id={msg.bot_self_id} 类型={msg.target_type} "
-                    f"目标={msg.target_id} 文本={''.join(str(c.data) for c in msg.content if c.data)[:80]!r}\n"
-                )
-        except OSError:
-            pass
 
         platform = self.context.get_platform_inst(msg.bot_self_id)
         components = await gs_to_components(
@@ -296,15 +285,22 @@ class YunzaiClient:
 
         chain = MessageChain()
         chain.chain.extend(components)
-        logger.info(f"【即将发送】[Yunzai]: {chain}")
         session = MessageSession(
             msg.bot_self_id,
             MessageType.GROUP_MESSAGE if is_group else MessageType.FRIEND_MESSAGE,
             session_id,
         )
         # QQ 官方群消息必须用被动回复(带 msg_id), 否则"主动消息失败, 无权限"。
-        # 适配器默认 _allow_group_proactive_send=True 会跳过 msg_id,
-        # 发送期间临时关掉它, 让 send_by_session 带上缓存的 msg_id。
+        # 两个关键点:
+        # 1) 适配器每次发送成功后会把 _session_last_message_id 覆盖成"刚发出的
+        #    消息 id", 导致同一批多条回复的第 2 条起 msg_id 变成上一条自己的 id,
+        #    被动回复报 40034005 msg_id 已过期。发送前重置回原始入站消息 id。
+        # 2) 适配器默认 _allow_group_proactive_send=True 会跳过 msg_id,
+        #    发送期间临时关掉它, 让 send_by_session 真正带上 msg_id。
+        cache = getattr(platform, "_session_last_message_id", None)
+        original = self._raw_msg_ids.get(session_id)
+        if cache is not None and original:
+            cache[session_id] = original
         proactive = getattr(platform, "_allow_group_proactive_send", None)
         if proactive:
             platform._allow_group_proactive_send = False
